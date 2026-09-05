@@ -231,6 +231,49 @@ async function seedInitialData(db: Db) {
   }
 }
 
+import { writeFileSync, readFileSync, existsSync } from 'fs';
+import { tmpdir } from 'os';
+import { join as pathJoin } from 'path';
+
+const DB_STATE_PATH = pathJoin(tmpdir(), 'travilever_db_state.json');
+
+function saveDbState(inMemDb: InMemoryDb) {
+  try {
+    const data: Record<string, any[]> = {};
+    for (const [name, col] of inMemDb.collections.entries()) {
+      data[name] = col.docs;
+    }
+    writeFileSync(DB_STATE_PATH, JSON.stringify(data), 'utf-8');
+  } catch (e) {
+    // Ignore fs errors
+  }
+}
+
+function loadDbState(inMemDb: InMemoryDb): boolean {
+  try {
+    if (!existsSync(DB_STATE_PATH)) return false;
+    const raw = readFileSync(DB_STATE_PATH, 'utf-8');
+    const data = JSON.parse(raw);
+    if (!data || typeof data !== 'object' || Object.keys(data).length === 0) return false;
+
+    for (const name of Object.keys(data)) {
+      const docs = data[name];
+      if (Array.isArray(docs)) {
+        const hydrated = docs.map((d: any) => ({
+          ...d,
+          _id: d._id ? (d._id.$oid ? new ObjectId(d._id.$oid) : (typeof d._id === 'string' && d._id.length === 24 ? new ObjectId(d._id) : d._id)) : new ObjectId(),
+          createdAt: d.createdAt ? new Date(d.createdAt) : new Date(),
+          updatedAt: d.updatedAt ? new Date(d.updatedAt) : new Date(),
+        }));
+        inMemDb.collections.set(name, new InMemoryCollection(name, hydrated, inMemDb));
+      }
+    }
+    return true;
+  } catch (e) {
+    return false;
+  }
+}
+
 const globalWithMongo = global as typeof globalThis & {
   _mongoClientPromise?: Promise<MongoClient>;
   _mongoMemoryServer?: any;
@@ -240,10 +283,12 @@ const globalWithMongo = global as typeof globalThis & {
 class InMemoryCollection {
   name: string;
   docs: any[];
+  parentDb?: InMemoryDb;
 
-  constructor(name: string, initialDocs: any[] = []) {
+  constructor(name: string, initialDocs: any[] = [], parentDb?: InMemoryDb) {
     this.name = name;
     this.docs = [...initialDocs];
+    this.parentDb = parentDb;
   }
 
   private matchesQuery(doc: any, query: any): boolean {
@@ -341,6 +386,7 @@ class InMemoryCollection {
       createdAt: doc.createdAt || new Date(),
     };
     this.docs.push(newDoc);
+    if (this.parentDb) saveDbState(this.parentDb);
     return { insertedId: newDoc._id };
   }
 
@@ -350,6 +396,7 @@ class InMemoryCollection {
       const res = await this.insertOne(doc);
       insertedIds.push(res.insertedId);
     }
+    if (this.parentDb) saveDbState(this.parentDb);
     return { insertedIds };
   }
 
@@ -360,6 +407,7 @@ class InMemoryCollection {
     if (update.$set) {
       Object.assign(doc, update.$set);
     }
+    if (this.parentDb) saveDbState(this.parentDb);
     return { modifiedCount: 1 };
   }
 
@@ -367,6 +415,7 @@ class InMemoryCollection {
     const index = this.docs.findIndex((d) => this.matchesQuery(d, query));
     if (index !== -1) {
       this.docs.splice(index, 1);
+      if (this.parentDb) saveDbState(this.parentDb);
       return { deletedCount: 1 };
     }
     return { deletedCount: 0 };
@@ -380,6 +429,7 @@ class InMemoryCollection {
         count++;
       }
     }
+    if (this.parentDb) saveDbState(this.parentDb);
     return { deletedCount: count };
   }
 
@@ -394,9 +444,11 @@ class InMemoryDb {
 
   collection(name: string): InMemoryCollection {
     if (!this.collections.has(name)) {
-      this.collections.set(name, new InMemoryCollection(name));
+      this.collections.set(name, new InMemoryCollection(name, [], this));
     }
-    return this.collections.get(name)!;
+    const col = this.collections.get(name)!;
+    col.parentDb = this;
+    return col;
   }
 }
 
@@ -467,7 +519,11 @@ export async function getDb(): Promise<Db | any> {
     if (!globalWithMongo._inMemoryDb) {
       console.log('[DB] Initializing pure JS InMemoryDb fallback...');
       const inMemDb = new InMemoryDb();
-      await seedInitialData(inMemDb as any);
+      const loaded = loadDbState(inMemDb);
+      if (!loaded) {
+        await seedInitialData(inMemDb as any);
+        saveDbState(inMemDb);
+      }
       globalWithMongo._inMemoryDb = inMemDb;
     }
     return globalWithMongo._inMemoryDb;

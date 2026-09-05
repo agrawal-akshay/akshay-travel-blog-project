@@ -12,8 +12,11 @@ export const revalidate = 0;
 
 export default async function SingleBlogPage({ params }: { params: Promise<{ slug: string }> | { slug: string } }) {
   const resolvedParams = params instanceof Promise ? await params : params;
-  const slug = resolvedParams?.slug || '';
-  const decodedSlug = decodeURIComponent(Array.isArray(slug) ? slug[0] : slug);
+  const rawSlug = resolvedParams?.slug || '';
+  const slugStr = Array.isArray(rawSlug) ? rawSlug[0] : rawSlug;
+  const decodedSlug = decodeURIComponent(slugStr).trim();
+  const hyphenatedSlug = decodedSlug.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/(^-|-$)+/g, '');
+  const spaceSlug = decodedSlug.replace(/-/g, ' ');
 
   let post: any = null;
   let relatedPosts: any[] = [];
@@ -21,11 +24,16 @@ export default async function SingleBlogPage({ params }: { params: Promise<{ slu
   try {
     const db = await getDb();
     
-    // Flexible query matching exact slug, case-insensitive slug, or _id
+    // Flexible query matching exact slug, decoded slug, hyphenated slug, spaces, case-insensitive regex, or _id/title
     const queryConditions: any[] = [
-      { slug: slug },
+      { slug: slugStr },
       { slug: decodedSlug },
-      { slug: { $regex: new RegExp(`^${decodedSlug.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, 'i') } }
+      { slug: hyphenatedSlug },
+      { slug: spaceSlug },
+      { slug: { $regex: new RegExp(`^${decodedSlug.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, 'i') } },
+      { slug: { $regex: new RegExp(`^${hyphenatedSlug.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, 'i') } },
+      { title: { $regex: new RegExp(`^${decodedSlug.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, 'i') } },
+      { title: { $regex: new RegExp(`^${spaceSlug.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, 'i') } }
     ];
 
     if (ObjectId.isValid(decodedSlug)) {
@@ -78,7 +86,7 @@ export default async function SingleBlogPage({ params }: { params: Promise<{ slu
       { title: 'Backpacking Through Europe on a Budget', category: 'Budget Backpacking', image: '/images/post_europe.png', slug: 'backpacking-europe-budget' },
       { title: 'Hidden Gems in the Swiss Alps', category: 'Road Trips', image: '/images/post_alps.png', slug: 'hidden-gems-swiss-alps' },
       { title: 'Digital Nomad Life in Bali', category: 'Solo Travel', image: '/images/post_bali.png', slug: 'digital-nomad-bali' }
-    ].filter(p => p.slug !== slug).slice(0, 3);
+    ].filter(p => p.slug !== decodedSlug).slice(0, 3);
   }
 
   const formattedPost = {
