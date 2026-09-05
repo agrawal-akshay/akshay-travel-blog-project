@@ -265,7 +265,13 @@ function loadDbState(inMemDb: InMemoryDb): boolean {
           createdAt: d.createdAt ? new Date(d.createdAt) : new Date(),
           updatedAt: d.updatedAt ? new Date(d.updatedAt) : new Date(),
         }));
-        inMemDb.collections.set(name, new InMemoryCollection(name, hydrated, inMemDb));
+        let col = inMemDb.collections.get(name);
+        if (col) {
+          col.docs = hydrated;
+        } else {
+          col = new InMemoryCollection(name, hydrated, inMemDb);
+          inMemDb.collections.set(name, col);
+        }
       }
     }
     return true;
@@ -508,6 +514,7 @@ clientPromise = globalWithMongo._mongoClientPromise;
 export async function getDb(): Promise<Db | any> {
   try {
     if (globalWithMongo._inMemoryDb) {
+      loadDbState(globalWithMongo._inMemoryDb);
       return globalWithMongo._inMemoryDb;
     }
     if (!clientPromise) {
@@ -525,6 +532,8 @@ export async function getDb(): Promise<Db | any> {
         saveDbState(inMemDb);
       }
       globalWithMongo._inMemoryDb = inMemDb;
+    } else {
+      loadDbState(globalWithMongo._inMemoryDb);
     }
     return globalWithMongo._inMemoryDb;
   }
