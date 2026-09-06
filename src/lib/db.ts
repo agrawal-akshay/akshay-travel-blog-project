@@ -4,8 +4,6 @@ import bcrypt from 'bcryptjs';
 async function seedInitialData(db: Db) {
   try {
     const usersCollection = db.collection('users');
-    // Ensure only real admin accounts exist, removing any fake users
-    await usersCollection.deleteMany({ role: { $ne: 'admin' } });
     const adminCount = await usersCollection.countDocuments({ role: 'admin' });
     if (adminCount === 0) {
       const hashedPassword = await bcrypt.hash('admin@123', 10);
